@@ -567,7 +567,17 @@ async def _solve_generator(
     *, dependant: Dependant, stack: AsyncExitStack, sub_values: dict[str, Any]
 ) -> Any:
     assert dependant.call
-    if _is_async_gen_callable(dependant.call):
+    if _is_coroutine_callable(dependant.call):
+        result = dependant.call(**sub_values)
+        if inspect.isawaitable(result):
+            result = await result
+        # Use contextlib's generator protocol, including throw/athrow and close.
+        # An async-for adapter would lose exceptions raised by the endpoint.
+        if inspect.isasyncgen(result):
+            cm = asynccontextmanager(lambda: result)()
+        else:
+            cm = contextmanager_in_threadpool(contextmanager(lambda: result)())
+    elif _is_async_gen_callable(dependant.call):
         cm = asynccontextmanager(dependant.call)(**sub_values)
     elif _is_gen_callable(dependant.call):
         cm = contextmanager_in_threadpool(contextmanager(dependant.call)(**sub_values))
