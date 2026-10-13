@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager as asynccontextmanager
 from typing import TypeVar
 
 import anyio.to_thread
-from anyio import CapacityLimiter
+from anyio import CancelScope, CapacityLimiter
 from starlette.concurrency import iterate_in_threadpool as iterate_in_threadpool  # noqa
 from starlette.concurrency import run_in_threadpool as run_in_threadpool  # noqa
 from starlette.concurrency import (  # noqa
@@ -27,15 +27,18 @@ async def contextmanager_in_threadpool(
     exit_limiter = CapacityLimiter(1)
     try:
         yield await run_in_threadpool(cm.__enter__)
-    except Exception as e:
-        ok = bool(
-            await anyio.to_thread.run_sync(
-                cm.__exit__, type(e), e, e.__traceback__, limiter=exit_limiter
+    except BaseException as e:
+        # Cancellation must reach the context manager, and its exit must finish.
+        with CancelScope(shield=True):
+            ok = bool(
+                await anyio.to_thread.run_sync(
+                    cm.__exit__, type(e), e, e.__traceback__, limiter=exit_limiter
+                )
             )
-        )
         if not ok:
             raise e
     else:
-        await anyio.to_thread.run_sync(
-            cm.__exit__, None, None, None, limiter=exit_limiter
-        )
+        with CancelScope(shield=True):
+            await anyio.to_thread.run_sync(
+                cm.__exit__, None, None, None, limiter=exit_limiter
+            )
